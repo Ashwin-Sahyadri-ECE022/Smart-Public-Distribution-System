@@ -92,7 +92,7 @@ User Authentication → Microcontroller → Load Sensor → Controlled Dispensin
 ### 1. Clone Repository
 
 ```bash
-git clone https://github.com/yourusername/smart-pds.git
+git clone https://github.com/Ashwin_Suresh/smart-pds.git
 cd smart-pds
 ```
 
