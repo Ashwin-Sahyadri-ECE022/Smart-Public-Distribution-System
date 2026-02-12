@@ -1,0 +1,275 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <Keypad.h>
+#include "HX711.h"
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// ---------- WiFi ----------
+const char* ssid = "Ashwin";
+const char* password = "12345678";
+
+// ---------- Firebase ----------
+String firebaseHost = "pdssytm-default-rtdb.firebaseio.com";
+String firebaseAuth = "lrOr6f792YmnqBWYNs2ApvywmYSSzohHu8s14W13";
+WiFiClientSecure firebaseClient;
+
+// ---------- Twilio ----------
+//give your twilio details
+
+// ---------- Load Cell ----------
+#define DOUT  32
+#define SCK   33
+HX711 scale;
+float calibration_factor = 2280.f;
+
+// ---------- 4x3 Keypad ----------
+const byte ROWS = 4;
+const byte COLS = 3;
+char keys[ROWS][COLS] = {
+  {'1','2','3'},
+  {'4','5','6'},
+  {'7','8','9'},
+  {'*','0','#'}
+};
+byte rowPins[ROWS] = {12, 13, 14, 27};
+byte colPins[COLS] = {26, 25, 19};
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+
+// ---------- OLED ----------
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// ---------- Globals ----------
+enum State { WAIT_METHOD, WAIT_QR, WAIT_OTP, SELECT_CATEGORY, SELECT_SUBCATEGORY, SELECT_RICE_TYPE, ENTER_QTY, WAIT_WEIGHT };
+State currentState = WAIT_METHOD;
+
+String category = "";
+String subcategory = "";
+String riceType = "";
+String quantity = "";
+
+// ---------- Categories ----------
+String categories[] = {"Pulses", "Grains", "Liquid"};
+String pulses[] = {"Toor", "Moong", "Chana"};
+String grains[] = {"Rice", "Wheat", "Barley"};
+String rice[] = {"White Rice", "Brown Rice", "Boiled Rice"};
+String liquids[] = {"Milk", "Oil", "Water"};
+
+// ---------- Helper: OLED ----------
+void showMessage(String msg){
+  Serial.println(msg);
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0,0);
+  display.println(msg);
+  display.display();
+}
+
+// ---------- Firebase PUT ----------
+void sendToFirebase(String path, String json) {
+  HTTPClient http;
+  String url = "https://" + firebaseHost + "/" + path + ".json?auth=" + firebaseAuth;
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  int code = http.PUT(json);
+  Serial.print("Firebase Response: "); Serial.println(code);
+  http.end();
+}
+
+// ---------- Twilio OTP ----------
+void sendOTP() {
+  otp_sent = String(random(1000, 9999));
+  String body = "Your OTP is: " + otp_sent;
+
+  HTTPClient http;
+  String url = "https://api.twilio.com/2010-04-01/Accounts/" + twilio_account_sid + "/Messages.json";
+  http.begin(url);
+  http.setAuthorization(twilio_account_sid.c_str(), twilio_auth_token.c_str());
+  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+
+  String postData = "To=" + user_phone_number + "&From=" + twilio_from_number + "&Body=" + body;
+  int httpResponseCode = http.POST(postData);
+  Serial.print("Twilio OTP Response: "); Serial.println(httpResponseCode);
+  http.end();
+}
+
+// ---------- Firebase check for new QR ----------
+bool checkNewQR(String &qrData){
+  HTTPClient http;
+  String url = "https://" + firebaseHost + "/qr.json?auth=" + firebaseAuth;
+  http.begin(url);
+  int code = http.GET();
+  if(code == 200){
+    String payload = http.getString();
+    if(payload != "null"){
+      qrData = payload;
+      http.end();
+      return true;
+    }
+  }
+  http.end();
+  return false;
+}
+
+// ---------- Setup ----------
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  // WiFi
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+  while(WiFi.status() != WL_CONNECTED){
+    delay(500); Serial.print(".");
+  }
+  Serial.println("\nConnected to WiFi");
+  firebaseClient.setInsecure();
+
+  // Load Cell
+  scale.begin(DOUT, SCK);
+  scale.set_scale(calibration_factor);
+  scale.tare();
+
+  // OLED
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)){
+    Serial.println("SSD1306 allocation failed");
+    for(;;);
+  }
+  display.clearDisplay();
+  showMessage("Select method:\n* QR\n# OTP");
+}
+
+// ---------- Loop ----------
+void loop(){
+  char key = keypad.getKey();
+  static String enteredOTP = "";
+
+  switch(currentState){
+
+    case WAIT_METHOD:
+      if(key){
+        if(key == '*'){
+          showMessage("QR method selected.\nWaiting for scan...");
+          currentState = WAIT_QR;
+        }
+        else if(key == '#'){
+          showMessage("OTP method selected.\nSending OTP...");
+          sendOTP();
+          enteredOTP = "";
+          showMessage("Enter OTP (4 digits):");
+          currentState = WAIT_OTP;
+        }
+      }
+      break;
+
+    case WAIT_QR: {
+      String qrData;
+      if(checkNewQR(qrData)){
+        showMessage("QR data received!\nStarting order...");
+        delay(1000);
+        currentState = SELECT_CATEGORY;
+        showMessage("Select Category:\n1.Pulses\n2.Grains\n3.Liquid");
+      }
+      break;
+    }
+
+    case WAIT_OTP:
+      if(key){
+        enteredOTP += key;
+        Serial.print(key);
+        if(enteredOTP.length() == 4){
+          if(enteredOTP == otp_sent){
+            showMessage("✅ OTP Verified!\nStarting order...");
+            delay(1000);
+            currentState = SELECT_CATEGORY;
+            enteredOTP = "";
+            showMessage("Select Category:\n1.Pulses\n2.Grains\n3.Liquid");
+          } else {
+            showMessage("❌ Wrong OTP. Try again");
+            enteredOTP = "";
+            sendOTP();
+          }
+        }
+      }
+      break;
+
+    case SELECT_CATEGORY:
+      if(key){
+        int num = key - '0';
+        if(num >=1 && num <=3){
+          category = categories[num-1];
+          currentState = SELECT_SUBCATEGORY;
+          String msg = "Select Subcategory:\n";
+          if(category=="Pulses") for(int i=0;i<3;i++) msg += String(i+1)+". "+pulses[i]+"\n";
+          if(category=="Grains") for(int i=0;i<3;i++) msg += String(i+1)+". "+grains[i]+"\n";
+          if(category=="Liquid") for(int i=0;i<3;i++) msg += String(i+1)+". "+liquids[i]+"\n";
+          showMessage(msg);
+        }
+      }
+      break;
+
+    case SELECT_SUBCATEGORY:
+      if(key){
+        int num = key - '0';
+        if(category=="Pulses" && num>=1 && num<=3) subcategory = pulses[num-1];
+        else if(category=="Grains" && num>=1 && num<=3){
+          String g = grains[num-1];
+          if(g=="Rice"){
+            currentState = SELECT_RICE_TYPE;
+            String msg="Select Rice type:\n";
+            for(int i=0;i<3;i++) msg += String(i+1)+". "+rice[i]+"\n";
+            showMessage(msg);
+            return;
+          } else subcategory = g;
+        }
+        else if(category=="Liquid" && num>=1 && num<=3) subcategory = liquids[num-1];
+
+        if(subcategory != ""){
+          currentState = ENTER_QTY;
+          quantity = "";
+          showMessage("Enter qty (end with #):");
+        }
+      }
+      break;
+
+    case SELECT_RICE_TYPE:
+      if(key){
+        int num = key - '0';
+        if(num>=1 && num<=3){
+          subcategory = rice[num-1];
+          currentState = ENTER_QTY;
+          quantity = "";
+          showMessage("Enter qty (end with #):");
+        }
+      }
+      break;
+
+    case ENTER_QTY:
+      if(key){
+        if(key=='#'){
+          currentState = WAIT_WEIGHT;
+          showMessage("Place item on scale...\nReading in 5s...");
+          delay(5000);
+          float weight = scale.get_units(10);
+          String json = "{\"category\":\""+category+"\",\"subcategory\":\""+subcategory+"\",\"quantity\":\""+quantity+"\",\"weight\":\""+String(weight)+"g\"}";
+          sendToFirebase("orders", json);
+          showMessage("✅ Data sent!\nNext user:\n* QR\n# OTP");
+          category=""; subcategory=""; quantity="";
+          currentState = WAIT_METHOD;
+        } else {
+          quantity += key;
+          Serial.print(key);
+        }
+      }
+      break;
+
+    case WAIT_WEIGHT:
+      // handled above
+      break;
+  }
+}
