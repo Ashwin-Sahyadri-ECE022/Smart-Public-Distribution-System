@@ -8,12 +8,12 @@
 #include <Adafruit_SSD1306.h>
 
 // ---------- WiFi ----------
-const char* ssid = "Ashwin";
-const char* password = "12345678";
+const char* ssid = "";
+const char* password = "";
 
 // ---------- Firebase ----------
-String firebaseHost = "pdssytm-default-rtdb.firebaseio.com";
-String firebaseAuth = "lrOr6f792YmnqBWYNs2ApvywmYSSzohHu8s14W13";
+String firebaseHost = " ";
+String firebaseAuth = " ";
 WiFiClientSecure firebaseClient;
 
 // ---------- Twilio ----------
