@@ -188,9 +188,9 @@ RATION_LIMIT = 5   // kg example
 
 ---
 
-## ✍️ Author
+## ✍️ Authors
 
-**Ashwin Suresh**
+**Ashwin Suresh** & **Neha**
 
 Electronics and Communication Engineering
 
